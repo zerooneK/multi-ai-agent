@@ -193,6 +193,7 @@ Produce the JSON quality report now. Remember: never report a file as missing if
             (MAX_FILE_CHARS, MAX_FILES),           # attempt 1: normal
             (1000, 10),                             # attempt 2: reduced
             (500,  5),                              # attempt 3: minimal
+            (0,    0),                              # attempt 4: no file contents at all
         ], start=1):
             _files_content = self._collect_files(output_dir, all_files, max_chars=chars, max_files=files)
             _prompt = f"""Review the generated full-stack project: {plan.project_name}
@@ -208,18 +209,18 @@ Produce the JSON quality report now. Remember: never report a file as missing if
 === PROJECT PLAN (reference) ===
 {plan.to_json(indent=1)}
 
-=== FILE CONTENTS (showing {files} files, {chars} chars each) ===
-{_files_content}
-
+{f"=== FILE CONTENTS (showing {files} files, {chars} chars each) ==={chr(10)}{_files_content}{chr(10)}" if chars > 0 else ""}
 Produce the JSON quality report now. Remember: never report a file as missing if it is in FILES ON DISK."""
             try:
                 raw = self.chat(_prompt, max_tokens=8192)
                 break
             except Exception as _exc:
-                if _is_context_error(_exc) and _ctx_attempt < 3:
+                if _is_context_error(_exc):
                     logger.warning("QA context window exceeded (attempt %d/3) — retrying with smaller context", _ctx_attempt)
                     continue
-                raise
+                # Non-context error — break out and let fallback handle it
+                logger.warning("QA LLM error (attempt %d/3): %s", _ctx_attempt, _exc)
+                break
 
         try:
             raw    = raw or ""
