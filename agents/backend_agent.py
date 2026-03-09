@@ -58,6 +58,8 @@ Code rules:
 - __init__.py in every package directory
 - DATABASE_URL read from env variable with SQLite default
 - JWT stored as httpOnly cookie named access_token
+- requirements.txt path is backend/requirements.txt
+- .env.example path is backend/.env.example (NEVER at project root)
 - requirements.txt MUST always include: fastapi, uvicorn, sqlalchemy, python-jose[cryptography],
   passlib[bcrypt], python-multipart, pydantic-settings, pydantic[email], email-validator
 """
@@ -131,8 +133,8 @@ Files to generate:
 - backend/schemas/schemas.py (all Pydantic v2 schemas — request + response)
 - backend/routers/__init__.py
 {self._router_files(plan)}
-- requirements.txt
-- .env.example
+- backend/requirements.txt
+- backend/.env.example
 
 ["""
 
@@ -172,7 +174,8 @@ Only include files that need changes.
   {{"path": "backend/schemas/schemas.py", "content": "<Pydantic v2 schemas: {models_summary}>"}},
   {{"path": "backend/routers/__init__.py", "content": ""}},
   {{"path": "{routers.split(', ')[0]}", "content": "<CRUD endpoints for {models_summary}>"}},
-  {{"path": "requirements.txt", "content": "fastapi\\nuvicorn\\nsqlalchemy\\npython-jose[cryptography]\\npasslib[bcrypt]\\npython-multipart\\npydantic-settings\\npydantic[email]\\nemail-validator"}}
+  {{"path": "backend/requirements.txt", "content": "fastapi\\nuvicorn\\nsqlalchemy\\npython-jose[cryptography]\\npasslib[bcrypt]\\npython-multipart\\npydantic-settings\\npydantic[email]\\nemail-validator"}},
+  {{"path": "backend/.env.example", "content": "DATABASE_URL=sqlite:///./app.db\\nSECRET_KEY=change-me-in-production\\nALGORITHM=HS256\\nACCESS_TOKEN_EXPIRE_MINUTES=60"}}
 ]
 
 Replace every <...> placeholder with real, complete Python code.

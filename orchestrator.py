@@ -28,6 +28,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable
 
 from agents import BackendAgent, FrontendAgent, PlannerAgent, QAAgent
@@ -162,27 +163,14 @@ class Orchestrator:
         Path(plan_path).write_text(plan_json, encoding="utf-8")
         self._emit("💾 Plan saved", plan_path)
 
-        # ── Step 2: Backend ───────────────────────────────────────────
-        backend_message = self._run_agent(
-            agent=self.backend,
-            sender="orchestrator",
-            receiver="backend",
-            task_type=TaskType.BACKEND,
-            payload={"plan_json": plan_json, "output_dir": output_dir},
-            step_label="⚙️  Generating backend code",
+        # ── Step 2+3: Backend & Frontend — parallel if supported ────
+        self._emit("⚙️  Generating backend + frontend (parallel)", "")
+        backend_message, frontend_message = self._run_parallel(
+            plan_json=plan_json,
+            output_dir=output_dir,
         )
         if backend_message.status == TaskStatus.FAILED:
             return self._failed(backend_message.error or "Backend failed", t_start)
-
-        # ── Step 3: Frontend ──────────────────────────────────────────
-        frontend_message = self._run_agent(
-            agent=self.frontend,
-            sender="orchestrator",
-            receiver="frontend",
-            task_type=TaskType.FRONTEND,
-            payload={"plan_json": plan_json, "output_dir": output_dir},
-            step_label="🎨 Generating frontend code",
-        )
         if frontend_message.status == TaskStatus.FAILED:
             return self._failed(frontend_message.error or "Frontend failed", t_start)
 
@@ -342,6 +330,47 @@ class Orchestrator:
             logger.info("Agent %s done in %.1fs", receiver, elapsed)
 
         return message
+
+    def _run_parallel(
+        self,
+        plan_json: str,
+        output_dir: str,
+    ) -> tuple:
+        """Run backend and frontend agents in parallel using threads.
+
+        Safe because backend writes to output_dir/backend/ and frontend
+        writes to output_dir/frontend/ — no shared files at root level.
+        Falls back to sequential if PARALLEL_GENERATION=false in .env.
+        """
+        use_parallel = getattr(cfg, "parallel_generation", True)
+
+        def _run_backend() -> AgentMessage:
+            return self._run_agent(
+                agent=self.backend,
+                sender="orchestrator", receiver="backend",
+                task_type=TaskType.BACKEND,
+                payload={"plan_json": plan_json, "output_dir": output_dir},
+                step_label="⚙️  Generating backend code",
+            )
+
+        def _run_frontend() -> AgentMessage:
+            return self._run_agent(
+                agent=self.frontend,
+                sender="orchestrator", receiver="frontend",
+                task_type=TaskType.FRONTEND,
+                payload={"plan_json": plan_json, "output_dir": output_dir},
+                step_label="🎨 Generating frontend code",
+            )
+
+        if not use_parallel:
+            logger.info("Parallel generation disabled — running sequential")
+            return _run_backend(), _run_frontend()
+
+        logger.info("Running backend + frontend in parallel")
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            f_backend  = executor.submit(_run_backend)
+            f_frontend = executor.submit(_run_frontend)
+            return f_backend.result(), f_frontend.result()
 
     def _failed(self, reason: str, t_start: float) -> PipelineResult:
         logger.error("Pipeline failed: %s", reason)

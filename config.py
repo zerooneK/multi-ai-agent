@@ -106,6 +106,11 @@ class Config:
     # ── Logging ──────────────────────────────────────────────────────────
     LOG_LEVEL: str = "INFO"
 
+    # ── Parallel generation ──────────────────────────────────────────────
+    # Set PARALLEL_GENERATION=false in .env to disable (e.g. when using Ollama)
+    # Set PARALLEL_GENERATION=true for cloud APIs (Gemini, OpenRouter, Anthropic)
+    PARALLEL_GENERATION: bool = True
+
     # ------------------------------------------------------------------
     # Helper: resolve provider+model for a specific agent
     # ------------------------------------------------------------------
@@ -147,9 +152,10 @@ def _build() -> Config:
 
     kwargs: dict = dict(
         PROVIDER        = global_provider,
-        OUTPUT_DIR      = os.environ.get("OUTPUT_DIR",       Config.OUTPUT_DIR),
-        LOG_LEVEL       = os.environ.get("AGENT_LOG_LEVEL",  Config.LOG_LEVEL),
-        OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL",  Config.OLLAMA_BASE_URL),
+        OUTPUT_DIR           = os.environ.get("OUTPUT_DIR",           Config.OUTPUT_DIR),
+        LOG_LEVEL            = os.environ.get("AGENT_LOG_LEVEL",     Config.LOG_LEVEL),
+        OLLAMA_BASE_URL      = os.environ.get("OLLAMA_BASE_URL",     Config.OLLAMA_BASE_URL),
+        PARALLEL_GENERATION  = os.environ.get("PARALLEL_GENERATION", "true").strip().lower() != "false",
     )
 
     # Apply global model override to the active provider's default
