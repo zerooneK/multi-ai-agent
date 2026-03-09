@@ -38,7 +38,7 @@ from tools.file_tools import create_directory, list_files
 
 logger = logging.getLogger("orchestrator")
 
-MAX_FIX_ATTEMPTS = 3  # QA → fix loop limit
+MAX_FIX_ATTEMPTS = 5  # QA → fix loop limit
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +187,11 @@ class Orchestrator:
             return self._failed(frontend_message.error or "Frontend failed", t_start)
 
         # ── Step 4: QA + fix loop ─────────────────────────────────────
-        qa_report: dict = {}
+        qa_report:    dict       = {}
+        prev_issues:  frozenset  = frozenset()  # track stale/looping issues
+        stale_rounds: int        = 0
+        MAX_STALE                = 2            # stop if same issues repeat N times
+
         for attempt in range(1, MAX_FIX_ATTEMPTS + 1):
             label = f"🔍 QA check (attempt {attempt}/{MAX_FIX_ATTEMPTS})"
             qa_message = self._run_agent(
@@ -217,9 +221,27 @@ class Orchestrator:
             if qa_passed:
                 break
 
+            # ── Stale issue detection ─────────────────────────────────
+            # If QA keeps reporting the exact same issues after fixes,
+            # the model is hallucinating — stop the loop early.
+            current_issues = frozenset(
+                i.get("description", "") for i in qa_report.get("issues", [])
+            )
+            if current_issues and current_issues == prev_issues:
+                stale_rounds += 1
+                if stale_rounds >= MAX_STALE:
+                    self._emit(
+                        "⚠️  QA loop detected",
+                        f"Same issues reported {stale_rounds} times — likely hallucination. Stopping.",
+                    )
+                    break
+            else:
+                stale_rounds = 0
+            prev_issues = current_issues
+
             # ── Fix cycle ─────────────────────────────────────────────
             if attempt < MAX_FIX_ATTEMPTS:
-                backend_fix = qa_report.get("backend_fix_instructions", "")
+                backend_fix  = qa_report.get("backend_fix_instructions", "")
                 frontend_fix = qa_report.get("frontend_fix_instructions", "")
 
                 if backend_fix:
@@ -251,6 +273,13 @@ class Orchestrator:
                         },
                         step_label="🔧 Frontend fixing errors",
                     )
+
+                if not backend_fix and not frontend_fix:
+                    self._emit(
+                        "⚠️  QA reported failure but gave no fix instructions",
+                        "Stopping fix loop.",
+                    )
+                    break
             else:
                 self._emit(
                     "⚠️  Max fix attempts reached",

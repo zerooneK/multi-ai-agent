@@ -6,7 +6,8 @@ Filesystem tools used by all agents to write generated code to disk.
 
 from __future__ import annotations
 
-from pathlib import Path
+import os
+from pathlib import Path, PurePosixPath
 
 # Directories that are never useful for agents to read
 _SKIP_DIRS = {
@@ -18,13 +19,24 @@ _SKIP_DIRS = {
 _BINARY_EXTENSIONS = {
     ".node", ".wasm", ".bin", ".exe", ".dll", ".so", ".dylib",
     ".pyc", ".pyo", ".jpg", ".jpeg", ".png", ".gif", ".ico",
-    ".pdf", ".zip", ".tar", ".gz", ".lock",
+    ".pdf", ".zip", ".tar", ".gz",
 }
+
+# Files that are auto-generated and not useful for QA review
+_SKIP_FILES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "tsconfig.tsbuildinfo"}
 
 
 def create_file(path: str, content: str) -> str:
-    """Create a file and write content. Parent dirs are auto-created."""
-    target = Path(path)
+    """
+    Create a file and write content. Parent dirs are auto-created.
+
+    Normalises forward-slash paths to the OS separator so that
+    paths like 'frontend/app/(dashboard)/todos/[id]/page.tsx'
+    are created correctly on both Windows and Unix.
+    """
+    # Normalise: replace forward slashes with OS separator
+    normalised = os.path.normpath(path)
+    target = Path(normalised)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
     lines = content.count("\n") + 1
@@ -39,7 +51,8 @@ def read_file(path: str) -> str:
       - File does not exist
       - File is binary (non-UTF-8 bytes)
     """
-    target = Path(path)
+    normalised = os.path.normpath(path)
+    target = Path(normalised)
     if not target.exists():
         return f"[Error] File not found: {path}"
     if target.suffix.lower() in _BINARY_EXTENSIONS:
@@ -57,9 +70,9 @@ def list_files(directory: str) -> list[str]:
     Skips:
       - node_modules/, .next/, .git/, __pycache__/, dist/, build/
       - Binary file extensions (.node, .wasm, .bin, .pyc, ...)
-      - Any path component that starts with '.' (hidden dirs)
+      - Auto-generated lock files (package-lock.json, tsconfig.tsbuildinfo)
     """
-    root = Path(directory)
+    root = Path(os.path.normpath(directory))
     if not root.exists():
         return []
 
@@ -67,12 +80,12 @@ def list_files(directory: str) -> list[str]:
     for p in root.rglob("*"):
         if not p.is_file():
             continue
-        # Skip if any path part is a blocked directory
-        parts = set(p.relative_to(root).parts[:-1])  # dirs only, not filename
+        parts = set(p.relative_to(root).parts[:-1])
         if parts & _SKIP_DIRS:
             continue
-        # Skip binary extensions
         if p.suffix.lower() in _BINARY_EXTENSIONS:
+            continue
+        if p.name in _SKIP_FILES:
             continue
         results.append(str(p.relative_to(root)))
 
@@ -81,9 +94,26 @@ def list_files(directory: str) -> list[str]:
 
 def create_directory(path: str) -> str:
     """Create a directory and all missing parents."""
-    Path(path).mkdir(parents=True, exist_ok=True)
+    Path(os.path.normpath(path)).mkdir(parents=True, exist_ok=True)
     return f"[OK] Directory ready: {path}"
 
 
 def file_exists(path: str) -> bool:
-    return Path(path).exists()
+    return Path(os.path.normpath(path)).exists()
+
+
+def actual_files_set(directory: str) -> set[str]:
+    """
+    Return a set of all existing file paths (relative, forward-slash normalised)
+    under the given directory. Used by QA to cross-check 'MISSING' reports.
+    """
+    root = Path(os.path.normpath(directory))
+    if not root.exists():
+        return set()
+    result = set()
+    for p in root.rglob("*"):
+        if p.is_file():
+            # Use forward slashes for cross-platform consistency
+            rel = p.relative_to(root).as_posix()
+            result.add(rel)
+    return result
