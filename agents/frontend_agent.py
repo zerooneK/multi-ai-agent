@@ -210,36 +210,30 @@ CODE PATTERNS TO FOLLOW EXACTLY:
         prompt = self._fix_prompt(plan, fix_context) if fix_context \
             else self._generate_prompt(plan)
 
+        # ── Attempt 1: normal ────────────────────────────────────────
+        written: list[str] = []
         try:
-            raw   = self.chat(prompt, max_tokens=8192)
+            raw   = self.chat(prompt, max_tokens=16384)
             files = self.extract_json(raw)
+            written = self._write_files(files, output_dir)
+            message.mark_done(self._summary(written))
+            return message
+        except Exception as exc:
+            logger.warning("Frontend attempt 1 failed (%s) — retrying", exc)
 
-            if not isinstance(files, list):
-                files = [files]
-
-            written: list[str] = []
-            for f in files:
-                if not isinstance(f, dict):
-                    continue
-                rel_path = f.get("path", "")
-                content  = f.get("content", "")
-                if not rel_path or not content:
-                    continue
-                full_path = str(Path(output_dir) / rel_path)
-                create_file(full_path, content)
-                written.append(full_path)
-                logger.info("Frontend wrote: %s", full_path)
-
-            summary = (
-                f"Next.js frontend generation complete.\n"
-                f"Files written ({len(written)}):\n"
-                + "\n".join(f"  - {p}" for p in written)
-            )
-            message.mark_done(summary)
-
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.error("Frontend agent failed: %s", exc)
-            message.mark_failed(str(exc))
+        # ── Attempt 2: force JSON-only prompt ────────────────────────
+        try:
+            retry_prompt = self._json_only_prompt(plan, fix_context)
+            raw   = self.chat(retry_prompt, max_tokens=16384)
+            files = self.extract_json(raw)
+            written = self._write_files(files, output_dir)
+            message.mark_done(self._summary(written))
+        except Exception as exc2:
+            logger.error("Frontend agent failed: %s", exc2)
+            if written:
+                message.mark_done(self._summary(written) + f"\n[partial — error: {exc2}]")
+            else:
+                message.mark_failed(str(exc2))
 
         return message
 
@@ -310,6 +304,54 @@ CHECKLIST before fixing:
 
 Generate ONLY the corrected files as a JSON array.
 Output the JSON array now:"""
+
+
+    # ------------------------------------------------------------------
+    # Shared helpers
+    # ------------------------------------------------------------------
+
+    def _write_files(self, files, output_dir: str) -> list:
+        if not isinstance(files, list):
+            files = [files]
+        written = []
+        for f in files:
+            if not isinstance(f, dict):
+                continue
+            rel_path = f.get("path", "")
+            content  = f.get("content", "")
+            if not rel_path or content is None:
+                continue
+            from pathlib import Path
+            from tools.file_tools import create_file
+            full_path = str(Path(output_dir) / rel_path)
+            create_file(full_path, content)
+            written.append(full_path)
+            logger.info("Frontend wrote: %s", full_path)
+        return written
+
+    @staticmethod
+    def _summary(written: list) -> str:
+        return (
+            "Next.js frontend generation complete.\n"
+            f"Files written ({len(written)}):\n"
+            + "\n".join(f"  - {p}" for p in written)
+        )
+
+    def _json_only_prompt(self, plan, fix_context: str) -> str:
+        models_summary = ", ".join(m.name for m in plan.database_models) or "Item"
+        context = f"Fix these errors:\n{fix_context}\n\n" if fix_context else ""
+        return (
+            f"{context}Output JSON array only. Start with [ end with ]. No text outside.\n\n"
+            f"Generate a complete Next.js 14 frontend for {plan.project_name} ({models_summary}).\n"
+            "Include: package.json, tsconfig.json, next.config.ts, tailwind.config.ts, "
+            "postcss.config.js, .env.local, types/index.ts, lib/api.ts, lib/auth.ts, "
+            "app/globals.css, app/layout.tsx, app/page.tsx, "
+            "app/(auth)/login/page.tsx, app/(auth)/register/page.tsx, "
+            "components/NavBar.tsx, app/(dashboard)/items/page.tsx.\n"
+            "Rules: use client only on hook/event components; JWT in httpOnly cookie; "
+            "apiFetch with credentials:include; NEXT_PUBLIC_API_URL env var.\n"
+            "Output the complete JSON array now:"
+        )
 
     @staticmethod
     def _dashboard_pages(plan: ProjectPlan) -> str:
