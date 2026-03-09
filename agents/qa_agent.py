@@ -36,8 +36,8 @@ from tools.shell_tools import (
 
 logger = logging.getLogger("agent.qa")
 
-MAX_FILE_CHARS = 4000   # raised from 2500 so LLM sees more complete files
-MAX_FILES      = 30     # cap to keep prompt size sane
+MAX_FILE_CHARS = 2000   # raised from 2500 so LLM sees more complete files
+MAX_FILES      = 20     # cap to keep prompt size sane
 
 
 class QAAgent(BaseAgent):
