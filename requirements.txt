@@ -1,0 +1,10 @@
+# ── Core ────────────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0       # .env file loading
+
+# ── Provider SDKs (install for the provider you want) ────────────────────────
+anthropic>=0.49.0          # Anthropic Claude
+openai>=1.30.0             # OpenAI, OpenRouter, Ollama (all use this SDK)
+# google-generativeai>=0.8.0  # Google Gemini (uncomment if needed)
+
+# ── Optional: better terminal output ─────────────────────────────────────────
+rich>=13.0.0
