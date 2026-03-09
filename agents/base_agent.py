@@ -85,6 +85,16 @@ class BaseAgent(ABC):
         messages = list(history or [])
         messages.append({"role": "user", "content": user_content})
 
+        def _is_context_error(exc: Exception) -> bool:
+            msg = str(exc).lower()
+            return (
+                "context window" in msg
+                or "context_length" in msg
+                or "maximum context" in msg
+                or "prompt too long" in msg
+                or "prompt is too long" in msg
+            )
+
         last_exc: Exception | None = None
         for attempt in range(1, retries + 1):
             try:
@@ -95,6 +105,14 @@ class BaseAgent(ABC):
                 )
             except Exception as exc:  # pylint: disable=broad-except
                 last_exc = exc
+                # Context-window errors won't be fixed by retrying — raise immediately
+                # so the caller (e.g. QA agent) can retry with a smaller prompt.
+                if _is_context_error(exc):
+                    self._logger.warning(
+                        "LLM call failed (attempt %d/%d): %s — retrying in %ds",
+                        attempt, retries, exc, 0,
+                    )
+                    raise
                 delay = 2 ** attempt
                 self._logger.warning(
                     "LLM call failed (attempt %d/%d): %s — retrying in %ds",

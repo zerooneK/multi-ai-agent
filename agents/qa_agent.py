@@ -180,7 +180,13 @@ Produce the JSON quality report now. Remember: never report a file as missing if
         # ── Retry with reduced context if context window exceeded ──────
         def _is_context_error(exc: Exception) -> bool:
             msg = str(exc).lower()
-            return "context window" in msg or "context_length" in msg or "maximum context" in msg
+            return (
+                "context window" in msg
+                or "context_length" in msg
+                or "maximum context" in msg
+                or "prompt too long" in msg
+                or "prompt is too long" in msg
+            )
 
         raw = None
         for _ctx_attempt, (chars, files) in enumerate([
