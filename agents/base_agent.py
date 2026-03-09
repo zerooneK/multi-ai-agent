@@ -6,7 +6,7 @@ Abstract base class all specialist agents inherit from.
 Provides:
   - LLM provider access via self.provider
   - Shared chat() helper with retry
-  - JSON extraction helper
+  - JSON extraction helper with truncation recovery
   - Standard logging
 """
 
@@ -106,26 +106,62 @@ class BaseAgent(ABC):
             f"{self.name} agent LLM call failed after {retries} attempts: {last_exc}"
         )
 
+    # ------------------------------------------------------------------
+    # JSON extraction — robust against truncated / wrapped responses
+    # ------------------------------------------------------------------
+
     def extract_json(self, text: str) -> dict[str, Any]:
         """
-        Extract the first JSON object or array from a text response.
-        Strips markdown code fences if present.
+        Extract and parse a JSON object or array from an LLM response.
+
+        Handles these common LLM output problems:
+          1. Markdown code fences  (```json ... ```)
+          2. Prose before/after the JSON block
+          3. Truncated JSON (model hit max_tokens mid-object)
+             → attempts to auto-close unclosed braces/brackets
+          4. Ollama <think>...</think> reasoning tags before the JSON
+
+        Returns the parsed dict/list, or raises ValueError with context.
         """
-        # Remove markdown fences
-        clean = re.sub(r"```(?:json)?\s*", "", text)
+        # ── Step 0: strip <think>...</think> blocks (Ollama reasoning models)
+        clean = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+
+        # ── Step 1: strip markdown code fences
+        clean = re.sub(r"```(?:json)?\s*", "", clean)
         clean = re.sub(r"```", "", clean).strip()
 
-        # Find the outermost { ... } or [ ... ]
+        # ── Step 2: find the outermost { ... } or [ ... ]
         for start_char, end_char in [('{', '}'), ('[', ']')]:
             start = clean.find(start_char)
-            end   = clean.rfind(end_char)
-            if start != -1 and end != -1 and end > start:
+            if start == -1:
+                continue
+
+            # Try the full slice first (normal case)
+            end = clean.rfind(end_char)
+            if end != -1 and end > start:
                 try:
                     return json.loads(clean[start:end + 1])
                 except json.JSONDecodeError:
-                    continue
+                    pass  # fall through to truncation recovery
 
-        # Last-ditch: try parsing the whole cleaned string
+            # ── Step 3: truncation recovery
+            # The model stopped mid-JSON (hit max_tokens).
+            # Try to close all unclosed brackets so json.loads can parse it.
+            partial = clean[start:]
+            recovered = self._close_truncated_json(partial)
+            if recovered:
+                try:
+                    result = json.loads(recovered)
+                    self._logger.warning(
+                        "JSON was truncated — recovered partial response "
+                        "(%d chars original, %d chars recovered)",
+                        len(partial), len(recovered),
+                    )
+                    return result
+                except json.JSONDecodeError:
+                    pass
+
+        # ── Step 4: last-ditch — try the whole cleaned string
         try:
             return json.loads(clean)
         except json.JSONDecodeError as exc:
@@ -133,3 +169,63 @@ class BaseAgent(ABC):
                 f"Could not extract JSON from response.\n"
                 f"Response (first 500 chars):\n{text[:500]}"
             ) from exc
+
+    @staticmethod
+    def _close_truncated_json(partial: str) -> str | None:
+        """
+        Attempt to auto-close a truncated JSON string by tracking
+        open braces/brackets and appending the missing closing chars.
+
+        Also handles the common case where the last value was cut mid-string
+        (e.g. "title": "some long tex  — closes the string first).
+
+        Returns the repaired string, or None if repair is not possible.
+        """
+        stack        = []   # tracks '{' and '['
+        in_string    = False
+        escape_next  = False
+        last_colon   = -1   # position of most recent ':' outside strings
+
+        for i, ch in enumerate(partial):
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == '\\' and in_string:
+                escape_next = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch in ('{', '['):
+                stack.append(ch)
+            elif ch in ('}', ']'):
+                if stack:
+                    stack.pop()
+            elif ch == ':':
+                last_colon = i
+
+        if not stack:
+            return None  # JSON looks balanced already — not a truncation issue
+
+        # Build closing suffix
+        # If we're inside a string when truncation happened, close it first
+        suffix = ""
+        if in_string:
+            suffix += '"'
+            # If the cut happened in the middle of a value (after ':'),
+            # we need a placeholder so the key:value pair is valid
+            suffix += "... (truncated)"
+            suffix += '"'
+
+        # Close all open containers in reverse order
+        close_map = {'{': '}', '[': ']'}
+        for opener in reversed(stack):
+            # For an open object, append null value if needed
+            if opener == '{' and in_string:
+                suffix += '}'
+            else:
+                suffix += close_map[opener]
+
+        return partial + suffix
