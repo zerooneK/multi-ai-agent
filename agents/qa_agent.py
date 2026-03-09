@@ -36,8 +36,8 @@ from tools.shell_tools import (
 
 logger = logging.getLogger("agent.qa")
 
-MAX_FILE_CHARS = 2000   # raised from 2500 so LLM sees more complete files
-MAX_FILES      = 20     # cap to keep prompt size sane
+MAX_FILE_CHARS = 2000   # reduced to avoid context window limit on small models
+MAX_FILES      = 20     # reduced to keep prompt size under model context limit
 
 
 class QAAgent(BaseAgent):
@@ -177,8 +177,46 @@ RULES:
 
 Produce the JSON quality report now. Remember: never report a file as missing if it is in FILES ON DISK."""
 
+        # ── Retry with reduced context if context window exceeded ──────
+        def _is_context_error(exc: Exception) -> bool:
+            msg = str(exc).lower()
+            return "context window" in msg or "context_length" in msg or "maximum context" in msg
+
+        raw = None
+        for _ctx_attempt, (chars, files) in enumerate([
+            (MAX_FILE_CHARS, MAX_FILES),           # attempt 1: normal
+            (1000, 10),                             # attempt 2: reduced
+            (500,  5),                              # attempt 3: minimal
+        ], start=1):
+            _files_content = self._collect_files(output_dir, all_files, max_chars=chars, max_files=files)
+            _prompt = f"""Review the generated full-stack project: {plan.project_name}
+
+=== AUTOMATED CHECK RESULTS ===
+{py_report}
+
+{tsc_report}
+
+=== FILES ON DISK (these files EXIST — do not report them as missing) ===
+{files_on_disk_str}
+
+=== PROJECT PLAN (reference) ===
+{plan.to_json(indent=1)}
+
+=== FILE CONTENTS (showing {files} files, {chars} chars each) ===
+{_files_content}
+
+Produce the JSON quality report now. Remember: never report a file as missing if it is in FILES ON DISK."""
+            try:
+                raw = self.chat(_prompt, max_tokens=8192)
+                break
+            except Exception as _exc:
+                if _is_context_error(_exc) and _ctx_attempt < 3:
+                    logger.warning("QA context window exceeded (attempt %d/3) — retrying with smaller context", _ctx_attempt)
+                    continue
+                raise
+
         try:
-            raw    = self.chat(prompt, max_tokens=8192)
+            raw    = raw or ""
             report = self.extract_json(raw)
 
             # ── Step 5: Strip hallucinated MISSING issues ─────────────
@@ -271,7 +309,7 @@ Produce the JSON quality report now. Remember: never report a file as missing if
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _collect_files(output_dir: str, file_list: list[str]) -> str:
+    def _collect_files(output_dir: str, file_list: list[str], max_chars: int = MAX_FILE_CHARS, max_files: int = MAX_FILES) -> str:
         """Read files and format for the LLM prompt, prioritising key files."""
         PRIORITY = [
             "backend/main.py", "backend/auth.py",
@@ -289,7 +327,7 @@ Produce the JSON quality report now. Remember: never report a file as missing if
             except ValueError:
                 return (1, normalised)
 
-        sorted_files = sorted(file_list, key=sort_key)[:MAX_FILES]
+        sorted_files = sorted(file_list, key=sort_key)[:max_files]
 
         sections: list[str] = []
         for rel_path in sorted_files:
@@ -297,8 +335,8 @@ Produce the JSON quality report now. Remember: never report a file as missing if
             content   = read_file(full_path)
             if content.startswith("[Skipped]") or content.startswith("[Error]"):
                 continue
-            if len(content) > MAX_FILE_CHARS:
-                content = content[:MAX_FILE_CHARS] + "\n... (truncated)"
+            if len(content) > max_chars:
+                content = content[:max_chars] + "\n... (truncated)"
             sections.append(f"=== {rel_path} ===\n{content}\n")
 
         return "\n".join(sections) if sections else "(no files found)"

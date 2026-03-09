@@ -108,14 +108,14 @@ export default function LoginPage() {
   );
 }
 
-## EXAMPLE 4 — next.config.ts (API rewrite to FastAPI backend)
-import type { NextConfig } from "next";
-const nextConfig: NextConfig = {
+## EXAMPLE 4 — next.config.js (API rewrite to FastAPI backend)
+/** @type {import('next').NextConfig} */
+const nextConfig = {
   async rewrites() {
     return [{ source: "/api/:path*", destination: "http://localhost:8000/api/:path*" }];
   },
 };
-export default nextConfig;
+module.exports = nextConfig;
 
 ## EXAMPLE 5 — package.json (exact versions — do not change)
 {
@@ -185,6 +185,7 @@ ABSOLUTE RULES — never break these:
 6. IMAGES: next/image <Image> instead of <img>.
 
 7. PACKAGE.JSON: Always Next.js 14.2.29 exactly. Include "type-check": "tsc --noEmit".
+   next.config MUST be next.config.js (NOT .ts) — Next.js 14 does not support next.config.ts.
 
 8. STYLING: Tailwind utility classes only. Mobile-first responsive design.
 
@@ -259,7 +260,7 @@ Generate ALL of these files:
 ── Config & Setup ──────────────────────────────────────────────────
   frontend/package.json              (Next.js 14.2.29 — use example from system prompt)
   frontend/tsconfig.json             (strict: true, paths: {{"@/*": ["./*"]}})
-  frontend/next.config.ts            (API rewrite to http://localhost:8000)
+  frontend/next.config.js            (API rewrite to http://localhost:8000 — must be .js not .ts)
   frontend/tailwind.config.ts        (content: ["./app/**/*.tsx","./components/**/*.tsx"])
   frontend/postcss.config.js         (tailwind + autoprefixer plugins)
   frontend/.env.local                (NEXT_PUBLIC_API_URL=http://localhost:8000)
@@ -344,7 +345,7 @@ Output the JSON array now:"""
             f"{context}Output JSON array only. Start with [ end with ]. No text outside.\n\n"
             f"Generate a complete Next.js 14 frontend for {plan.project_name} ({models_summary}).\n"
             "ALL paths MUST start with 'frontend/' prefix.\n"
-            "Include: frontend/package.json, frontend/tsconfig.json, frontend/next.config.ts, "
+            "Include: frontend/package.json, frontend/tsconfig.json, frontend/next.config.js, "
             "frontend/tailwind.config.ts, frontend/postcss.config.js, frontend/.env.local, "
             "frontend/types/index.ts, frontend/lib/api.ts, frontend/lib/auth.ts, "
             "frontend/app/globals.css, frontend/app/layout.tsx, frontend/app/page.tsx, "
