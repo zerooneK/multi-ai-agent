@@ -51,12 +51,15 @@ Code rules:
 - Every file must be 100% complete — no placeholders, no # TODO
 - SQLAlchemy ORM with proper relationships
 - Pydantic v2 (from pydantic import BaseModel) — no deprecated v1 imports
+- If any field uses EmailStr, always add pydantic[email] and email-validator to requirements.txt
 - HTTPException for all error responses
 - CORS middleware in main.py allowing http://localhost:3000
 - python-jose for JWT, passlib[bcrypt] for password hashing
 - __init__.py in every package directory
 - DATABASE_URL read from env variable with SQLite default
 - JWT stored as httpOnly cookie named access_token
+- requirements.txt MUST always include: fastapi, uvicorn, sqlalchemy, python-jose[cryptography],
+  passlib[bcrypt], python-multipart, pydantic-settings, pydantic[email], email-validator
 """
 
     def run(self, message: AgentMessage) -> AgentMessage:
@@ -169,7 +172,7 @@ Only include files that need changes.
   {{"path": "backend/schemas/schemas.py", "content": "<Pydantic v2 schemas: {models_summary}>"}},
   {{"path": "backend/routers/__init__.py", "content": ""}},
   {{"path": "{routers.split(', ')[0]}", "content": "<CRUD endpoints for {models_summary}>"}},
-  {{"path": "requirements.txt", "content": "fastapi\\nuvicorn\\nsqlalchemy\\npython-jose[cryptography]\\npasslib[bcrypt]\\npython-multipart\\npydantic-settings"}}
+  {{"path": "requirements.txt", "content": "fastapi\\nuvicorn\\nsqlalchemy\\npython-jose[cryptography]\\npasslib[bcrypt]\\npython-multipart\\npydantic-settings\\npydantic[email]\\nemail-validator"}}
 ]
 
 Replace every <...> placeholder with real, complete Python code.
