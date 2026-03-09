@@ -10,6 +10,9 @@ Pipeline:
      (skipped gracefully if Node.js is not installed)
   3. LLM deep review      : reads all files, checks logic, references,
      Next.js rules, schema alignment
+     — Strategy 1: progressive prompt reduction (4 attempts, shrinking payload)
+     — Strategy 2: split backend/frontend review (2 separate calls, merged)
+     — Fallback   : automated checks only (if all LLM attempts fail)
   4. Post-process report  : strip hallucinated "MISSING" issues for files
      that actually exist on disk
   5. Returns unified JSON report with per-agent fix instructions
@@ -36,8 +39,8 @@ from tools.shell_tools import (
 
 logger = logging.getLogger("agent.qa")
 
-MAX_FILE_CHARS = 2000   # reduced to avoid context window limit on small models
-MAX_FILES      = 20     # reduced to keep prompt size under model context limit
+MAX_FILE_CHARS = 2000   # default chars per file
+MAX_FILES      = 20     # default max files sent to LLM
 
 
 class QAAgent(BaseAgent):
@@ -106,6 +109,10 @@ RULES:
 - Be specific in fix_instructions — name exact files and changes needed.
 """
 
+    # ------------------------------------------------------------------
+    # Main entry point
+    # ------------------------------------------------------------------
+
     def run(self, message: AgentMessage) -> AgentMessage:
         message.mark_running()
 
@@ -152,115 +159,317 @@ RULES:
 
         automated_passed = py_passed and tsc_passed
 
-        # ── Step 3: Build file inventory for LLM ─────────────────────
+        # ── Step 3: Build file inventory ─────────────────────────────
         all_files     = list_files(output_dir)
         files_on_disk = actual_files_set(output_dir)
-        files_content = self._collect_files(output_dir, all_files)
         files_on_disk_str = "\n".join(sorted(files_on_disk))
 
         # ── Step 4: LLM deep review ───────────────────────────────────
-        prompt = f"""Review the generated full-stack project: {plan.project_name}
+        # Strategy 1: progressive prompt reduction
+        # Strategy 2: split backend/frontend (fallback if strategy 1 fails)
+        report = None
 
-=== AUTOMATED CHECK RESULTS ===
-{py_report}
+        report = self._strategy_progressive(
+            plan, py_report, tsc_report, files_on_disk_str, all_files, output_dir,
+        )
 
-{tsc_report}
-
-=== FILES ON DISK (these files EXIST — do not report them as missing) ===
-{files_on_disk_str}
-
-=== PROJECT PLAN (reference) ===
-{plan.to_json(indent=1)}
-
-=== FILE CONTENTS ===
-{files_content}
-
-Produce the JSON quality report now. Remember: never report a file as missing if it is in FILES ON DISK."""
-
-        # ── Retry with reduced context if context window exceeded ──────
-        def _is_context_error(exc: Exception) -> bool:
-            msg = str(exc).lower()
-            return (
-                "context window" in msg
-                or "context_length" in msg
-                or "maximum context" in msg
-                or "prompt too long" in msg
-                or "prompt is too long" in msg
+        if report is None:
+            logger.info("QA progressive strategy failed — trying split review")
+            report = self._strategy_split(
+                plan, py_report, tsc_report, files_on_disk_str, all_files, output_dir,
             )
 
-        raw = None
-        for _ctx_attempt, (chars, files) in enumerate([
-            (MAX_FILE_CHARS, MAX_FILES),           # attempt 1: normal
-            (1000, 10),                             # attempt 2: reduced
-            (500,  5),                              # attempt 3: minimal
-            (0,    0),                              # attempt 4: no file contents at all
-        ], start=1):
-            _files_content = self._collect_files(output_dir, all_files, max_chars=chars, max_files=files)
-            _prompt = f"""Review the generated full-stack project: {plan.project_name}
+        if report is None:
+            logger.error("QA LLM review failed: all strategies exhausted")
+            report = self._make_fallback(automated_passed, py_results,
+                                         "all LLM review strategies exhausted")
 
-=== AUTOMATED CHECK RESULTS ===
-{py_report}
+        # ── Step 5: Post-process ──────────────────────────────────────
+        report = self._filter_hallucinated_issues(report, files_on_disk)
 
-{tsc_report}
+        if not py_passed and report.get("passed"):
+            report["passed"]  = False
+            report["summary"] = "Python syntax errors detected"
+        if not tsc_passed and report.get("passed"):
+            report["passed"]  = False
+            report["summary"] = "TypeScript errors detected"
 
-=== FILES ON DISK (these files EXIST — do not report them as missing) ===
-{files_on_disk_str}
-
-=== PROJECT PLAN (reference) ===
-{plan.to_json(indent=1)}
-
-{f"=== FILE CONTENTS (showing {files} files, {chars} chars each) ==={chr(10)}{_files_content}{chr(10)}" if chars > 0 else ""}
-Produce the JSON quality report now. Remember: never report a file as missing if it is in FILES ON DISK."""
-            try:
-                raw = self.chat(_prompt, max_tokens=8192)
-                break
-            except Exception as _exc:
-                if _is_context_error(_exc):
-                    logger.warning("QA context window exceeded (attempt %d/3) — retrying with smaller context", _ctx_attempt)
-                    continue
-                # Non-context error — break out and let fallback handle it
-                logger.warning("QA LLM error (attempt %d/3): %s", _ctx_attempt, _exc)
-                break
-
-        try:
-            raw    = raw or ""
-            report = self.extract_json(raw)
-
-            # ── Step 5: Strip hallucinated MISSING issues ─────────────
-            report = self._filter_hallucinated_issues(report, files_on_disk)
-
-            # Sync automated failures into LLM report
-            if not py_passed and report.get("passed"):
-                report["passed"]  = False
-                report["summary"] = "Python syntax errors detected"
-            if not tsc_passed and report.get("passed"):
-                report["passed"]  = False
-                report["summary"] = "TypeScript errors detected"
-
-            logger.info("QA report: passed=%s issues=%d",
-                        report.get("passed"), len(report.get("issues", [])))
-            message.mark_done(json.dumps(report, indent=2))
-
-        except Exception as exc:
-            logger.error("QA LLM review failed: %s", exc)
-            fallback = {
-                "passed":  automated_passed,
-                "summary": f"Automated checks only (LLM review failed: {exc})",
-                "issues":  [],
-                "backend_fix_instructions":  "",
-                "frontend_fix_instructions": "",
-            }
-            for r in py_results:
-                if not r["success"]:
-                    fallback["issues"].append({
-                        "file": r["file"], "severity": "error",
-                        "description": r["errors"],
-                        "suggestion": "Fix syntax error",
-                    })
-                    fallback["backend_fix_instructions"] = "Fix all Python syntax errors."
-            message.mark_done(json.dumps(fallback, indent=2))
-
+        logger.info("QA report: passed=%s issues=%d",
+                    report.get("passed"), len(report.get("issues", [])))
+        message.mark_done(json.dumps(report, indent=2))
         return message
+
+    # ------------------------------------------------------------------
+    # Strategy 1 — Progressive prompt reduction
+    # ------------------------------------------------------------------
+
+    def _strategy_progressive(
+        self,
+        plan: ProjectPlan,
+        py_report: str,
+        tsc_report: str,
+        files_on_disk_str: str,
+        all_files: list[str],
+        output_dir: str,
+    ) -> dict | None:
+        """
+        Try LLM review with progressively smaller payloads.
+
+        Attempt 1: full file contents (2000 chars, 20 files)
+        Attempt 2: reduced file contents (500 chars, 5 files)
+        Attempt 3: no file contents, full plan
+        Attempt 4: no file contents, no plan (automated results only)
+        """
+        plan_summary = f"Project: {plan.project_name}\nModels: {', '.join(m.name for m in plan.database_models)}\nEndpoints: {len(plan.api_endpoints)}"
+
+        attempts = [
+            # (max_chars, max_files, include_plan_full, include_files)
+            (2000, 20, True,  True),
+            (500,   5, True,  True),
+            (0,     0, True,  False),
+            (0,     0, False, False),
+        ]
+
+        for attempt_num, (chars, files, include_plan, include_files) in enumerate(attempts, start=1):
+            file_section = ""
+            if include_files and chars > 0:
+                _content = self._collect_files(output_dir, all_files,
+                                               max_chars=chars, max_files=files)
+                file_section = f"\n=== FILE CONTENTS (showing {files} files, {chars} chars each) ===\n{_content}\n"
+
+            plan_section = (
+                f"\n=== PROJECT PLAN ===\n{plan.to_json(indent=1)}\n"
+                if include_plan else
+                f"\n=== PROJECT SUMMARY ===\n{plan_summary}\n"
+            )
+
+            prompt = (
+                f"Review the generated full-stack project: {plan.project_name}\n\n"
+                f"=== AUTOMATED CHECK RESULTS ===\n{py_report}\n\n{tsc_report}\n\n"
+                f"=== FILES ON DISK (do not report these as missing) ===\n{files_on_disk_str}\n"
+                f"{plan_section}"
+                f"{file_section}"
+                "Produce the JSON quality report now."
+            )
+
+            try:
+                raw = self.chat(prompt, max_tokens=8192)
+                report = self.extract_json(raw)
+                logger.info("QA progressive strategy succeeded (attempt %d/4)", attempt_num)
+                return report
+            except Exception as exc:
+                if self._is_context_error(exc):
+                    logger.warning(
+                        "QA progressive attempt %d/4 — context exceeded, reducing payload", attempt_num
+                    )
+                    continue
+                logger.warning("QA progressive attempt %d/4 — error: %s", attempt_num, exc)
+                return None  # non-context error, stop trying
+
+        return None  # all 4 attempts exhausted
+
+    # ------------------------------------------------------------------
+    # Strategy 2 — Split backend / frontend review
+    # ------------------------------------------------------------------
+
+    def _strategy_split(
+        self,
+        plan: ProjectPlan,
+        py_report: str,
+        tsc_report: str,
+        files_on_disk_str: str,
+        all_files: list[str],
+        output_dir: str,
+    ) -> dict | None:
+        """
+        Review backend and frontend separately, then merge results.
+        Each call uses ~half the tokens of a combined review.
+        """
+        backend_report  = self._review_backend(plan, py_report, all_files, output_dir)
+        frontend_report = self._review_frontend(plan, tsc_report, all_files, output_dir)
+
+        if backend_report is None and frontend_report is None:
+            return None
+
+        return self._merge_reports(
+            backend_report  or self._empty_report(True),
+            frontend_report or self._empty_report(True),
+        )
+
+    def _review_backend(
+        self,
+        plan: ProjectPlan,
+        py_report: str,
+        all_files: list[str],
+        output_dir: str,
+    ) -> dict | None:
+        """LLM review of backend files only."""
+        BACKEND_PRIORITY = [
+            "backend/main.py", "backend/auth.py", "backend/config.py",
+            "backend/database.py", "backend/models/models.py",
+            "backend/schemas/schemas.py", "backend/routers/auth.py",
+            "backend/requirements.txt",
+        ]
+        backend_files = [f for f in all_files if f.replace("\\", "/").startswith("backend/")]
+        content = self._collect_files(output_dir, backend_files,
+                                      max_chars=2000, max_files=15,
+                                      priority=BACKEND_PRIORITY)
+
+        prompt = (
+            f"Review ONLY the FastAPI backend for: {plan.project_name}\n\n"
+            f"=== PYTHON SYNTAX CHECK ===\n{py_report}\n\n"
+            f"=== PROJECT PLAN ===\n{plan.to_json(indent=1)}\n\n"
+            f"=== BACKEND FILE CONTENTS ===\n{content}\n\n"
+            "Output a JSON report covering ONLY backend issues.\n"
+            "Use the same JSON format: {passed, summary, issues[], "
+            "backend_fix_instructions, frontend_fix_instructions}.\n"
+            "Set frontend_fix_instructions to ''.\n"
+            "Output the JSON now:"
+        )
+
+        for attempt in range(1, 4):
+            try:
+                raw = self.chat(prompt, max_tokens=4096)
+                report = self.extract_json(raw)
+                logger.info("QA backend split review OK")
+                return report
+            except Exception as exc:
+                if self._is_context_error(exc):
+                    logger.warning("QA backend split attempt %d/3 — context exceeded", attempt)
+                    # Halve the content on each retry
+                    backend_files = backend_files[:max(1, len(backend_files) // 2)]
+                    content = self._collect_files(output_dir, backend_files,
+                                                  max_chars=1000, max_files=8,
+                                                  priority=BACKEND_PRIORITY)
+                    prompt = prompt.replace(
+                        f"=== BACKEND FILE CONTENTS ===\n{content}",
+                        f"=== BACKEND FILE CONTENTS ===\n{content}",
+                    )
+                    continue
+                logger.warning("QA backend split error: %s", exc)
+                return None
+
+        return None
+
+    def _review_frontend(
+        self,
+        plan: ProjectPlan,
+        tsc_report: str,
+        all_files: list[str],
+        output_dir: str,
+    ) -> dict | None:
+        """LLM review of frontend files only."""
+        FRONTEND_PRIORITY = [
+            "frontend/app/layout.tsx", "frontend/app/page.tsx",
+            "frontend/lib/api.ts", "frontend/lib/auth.ts",
+            "frontend/types/index.ts", "frontend/package.json",
+            "frontend/next.config.js",
+            "frontend/app/(auth)/login/page.tsx",
+            "frontend/app/(auth)/register/page.tsx",
+        ]
+        frontend_files = [f for f in all_files if f.replace("\\", "/").startswith("frontend/")]
+        content = self._collect_files(output_dir, frontend_files,
+                                      max_chars=2000, max_files=15,
+                                      priority=FRONTEND_PRIORITY)
+
+        prompt = (
+            f"Review ONLY the Next.js 14 frontend for: {plan.project_name}\n\n"
+            f"=== TYPESCRIPT CHECK ===\n{tsc_report}\n\n"
+            f"=== PROJECT PLAN ===\n{plan.to_json(indent=1)}\n\n"
+            f"=== FRONTEND FILE CONTENTS ===\n{content}\n\n"
+            "Output a JSON report covering ONLY frontend issues.\n"
+            "Use the same JSON format: {passed, summary, issues[], "
+            "backend_fix_instructions, frontend_fix_instructions}.\n"
+            "Set backend_fix_instructions to ''.\n"
+            "Output the JSON now:"
+        )
+
+        for attempt in range(1, 4):
+            try:
+                raw = self.chat(prompt, max_tokens=4096)
+                report = self.extract_json(raw)
+                logger.info("QA frontend split review OK")
+                return report
+            except Exception as exc:
+                if self._is_context_error(exc):
+                    logger.warning("QA frontend split attempt %d/3 — context exceeded", attempt)
+                    frontend_files = frontend_files[:max(1, len(frontend_files) // 2)]
+                    content = self._collect_files(output_dir, frontend_files,
+                                                  max_chars=1000, max_files=8,
+                                                  priority=FRONTEND_PRIORITY)
+                    continue
+                logger.warning("QA frontend split error: %s", exc)
+                return None
+
+        return None
+
+    def _merge_reports(self, backend: dict, frontend: dict) -> dict:
+        """Merge two partial QA reports into one unified report."""
+        all_issues = backend.get("issues", []) + frontend.get("issues", [])
+        has_errors = any(i.get("severity") == "error" for i in all_issues)
+        passed     = not has_errors
+
+        b_fix = backend.get("backend_fix_instructions", "").strip()
+        f_fix = frontend.get("frontend_fix_instructions", "").strip()
+
+        b_summary = backend.get("summary", "")
+        f_summary = frontend.get("summary", "")
+        if b_summary and f_summary:
+            summary = f"Backend: {b_summary} | Frontend: {f_summary}"
+        else:
+            summary = b_summary or f_summary or ("All checks passed" if passed else "Issues found")
+
+        return {
+            "passed":                    passed,
+            "summary":                   summary,
+            "issues":                    all_issues,
+            "backend_fix_instructions":  b_fix,
+            "frontend_fix_instructions": f_fix,
+        }
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_context_error(exc: Exception) -> bool:
+        msg = str(exc).lower()
+        return (
+            "context window" in msg
+            or "context_length" in msg
+            or "maximum context" in msg
+            or "prompt too long" in msg
+            or "prompt is too long" in msg
+            or "context length" in msg
+        )
+
+    @staticmethod
+    def _make_fallback(automated_passed: bool, py_results: list, reason: str) -> dict:
+        fallback: dict = {
+            "passed":                    automated_passed,
+            "summary":                   f"Automated checks only (LLM review failed: {reason})",
+            "issues":                    [],
+            "backend_fix_instructions":  "",
+            "frontend_fix_instructions": "",
+        }
+        for r in py_results:
+            if not r["success"]:
+                fallback["issues"].append({
+                    "file": r["file"], "severity": "error",
+                    "description": r["errors"],
+                    "suggestion": "Fix syntax error",
+                })
+                fallback["backend_fix_instructions"] = "Fix all Python syntax errors."
+        return fallback
+
+    @staticmethod
+    def _empty_report(passed: bool) -> dict:
+        return {
+            "passed": passed, "summary": "No issues found",
+            "issues": [],
+            "backend_fix_instructions":  "",
+            "frontend_fix_instructions": "",
+        }
 
     # ------------------------------------------------------------------
     # Post-processing: remove hallucinated MISSING reports
@@ -270,40 +479,34 @@ Produce the JSON quality report now. Remember: never report a file as missing if
     def _filter_hallucinated_issues(report: dict, files_on_disk: set[str]) -> dict:
         """
         Remove any issue that claims a file is MISSING when it actually
-        exists on disk. Also normalise file paths for comparison.
+        exists on disk.
         """
         if "issues" not in report:
             return report
 
         def _normalise(path: str) -> str:
-            """Strip leading separators and normalise to forward slashes."""
             return path.replace("\\", "/").lstrip("/").lower()
 
         disk_normalised = {_normalise(f) for f in files_on_disk}
 
         def _is_hallucinated(issue: dict) -> bool:
-            file_ref  = issue.get("file", "").lower()
-            desc      = issue.get("description", "").lower()
-            is_missing_claim = "missing" in file_ref or "missing" in desc
-            if not is_missing_claim:
+            file_ref = issue.get("file", "").lower()
+            desc     = issue.get("description", "").lower()
+            if "missing" not in file_ref and "missing" not in desc:
                 return False
-            # Extract the actual filename from the issue reference
-            # e.g. "backend/routers/users.py - MISSING" → "backend/routers/users.py"
             clean_ref = _normalise(file_ref.replace("- missing", "").strip())
-            # Check if the file or any similar path exists on disk
             for disk_path in disk_normalised:
                 if clean_ref and (clean_ref in disk_path or disk_path.endswith(clean_ref)):
                     return True
             return False
 
-        original_count   = len(report["issues"])
-        filtered_issues  = [i for i in report["issues"] if not _is_hallucinated(i)]
-        removed          = original_count - len(filtered_issues)
+        original_count  = len(report["issues"])
+        filtered_issues = [i for i in report["issues"] if not _is_hallucinated(i)]
+        removed         = original_count - len(filtered_issues)
 
         if removed > 0:
             logger.info("QA: removed %d hallucinated 'MISSING' issue(s)", removed)
             report["issues"] = filtered_issues
-            # Re-evaluate passed based on remaining errors
             has_errors = any(i.get("severity") == "error" for i in filtered_issues)
             if not has_errors:
                 report["passed"]  = True
@@ -316,21 +519,28 @@ Produce the JSON quality report now. Remember: never report a file as missing if
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _collect_files(output_dir: str, file_list: list[str], max_chars: int = MAX_FILE_CHARS, max_files: int = MAX_FILES) -> str:
+    def _collect_files(
+        output_dir: str,
+        file_list: list[str],
+        max_chars: int = MAX_FILE_CHARS,
+        max_files: int = MAX_FILES,
+        priority: list[str] | None = None,
+    ) -> str:
         """Read files and format for the LLM prompt, prioritising key files."""
-        PRIORITY = [
+        DEFAULT_PRIORITY = [
             "backend/main.py", "backend/auth.py",
             "backend/models/models.py", "backend/schemas/schemas.py",
             "backend/routers/users.py", "backend/requirements.txt",
             "frontend/app/layout.tsx", "frontend/lib/api.ts",
             "frontend/lib/auth.ts", "frontend/types/index.ts",
-            "frontend/package.json", "frontend/next.config.ts",
+            "frontend/package.json", "frontend/next.config.js",
         ]
+        _priority = priority or DEFAULT_PRIORITY
 
         def sort_key(p: str) -> tuple:
             normalised = p.replace("\\", "/")
             try:
-                return (0, PRIORITY.index(normalised))
+                return (0, _priority.index(normalised))
             except ValueError:
                 return (1, normalised)
 
@@ -342,7 +552,7 @@ Produce the JSON quality report now. Remember: never report a file as missing if
             content   = read_file(full_path)
             if content.startswith("[Skipped]") or content.startswith("[Error]"):
                 continue
-            if len(content) > max_chars:
+            if max_chars > 0 and len(content) > max_chars:
                 content = content[:max_chars] + "\n... (truncated)"
             sections.append(f"=== {rel_path} ===\n{content}\n")
 
