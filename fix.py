@@ -212,13 +212,13 @@ def main() -> None:
 
         if result.status.value == "done":
             _print(
-                f"\n[green]✓ Fixed![/green]\n{result.content}" if _RICH
-                else f"\n✓ Fixed!\n{result.content}"
+                f"\n[green]✓ Fixed![/green]\n{result.result}" if _RICH
+                else f"\n✓ Fixed!\n{result.result}"
             )
         else:
             _print(
-                f"\n[red]✗ Fixer failed:[/red] {result.content}" if _RICH
-                else f"\n✗ Fixer failed: {result.content}"
+                f"\n[red]✗ Fixer failed:[/red] {result.error}" if _RICH
+                else f"\n✗ Fixer failed: {result.error}"
             )
 
         # ── Ask if there's another error ──────────────────────────────
