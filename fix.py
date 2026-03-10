@@ -143,16 +143,12 @@ def _read_multiline_error() -> str:
 
 def _make_fixer() -> FixerAgent:
     """Instantiate FixerAgent using QA provider/model settings (same class of model)."""
-    provider = getattr(cfg, "QA_PROVIDER",   getattr(cfg, "AGENT_PROVIDER", "ollama"))
-    model    = getattr(cfg, "QA_MODEL",      getattr(cfg, "AGENT_MODEL",    "qwen2.5-coder:14b"))
-    base_url = getattr(cfg, "OLLAMA_BASE_URL", "http://localhost:11434/v1")
-    api_key  = getattr(cfg, "OPENAI_API_KEY", "")
+    provider = getattr(cfg, "QA_PROVIDER", getattr(cfg, "AGENT_PROVIDER", "ollama"))
+    model    = getattr(cfg, "QA_MODEL",    getattr(cfg, "AGENT_MODEL",    "qwen2.5-coder:14b"))
 
     return FixerAgent(
-        provider  = provider,
-        model     = model,
-        base_url  = base_url,
-        api_key   = api_key,
+        provider_name = provider,
+        model         = model,
     )
 
 
