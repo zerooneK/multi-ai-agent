@@ -1,21 +1,13 @@
-# =============================================================================
 # agents/__init__.py
-# -----------------------------------------------------------------------------
-# Re-exports all specialist agent classes so the Orchestrator and other
-# modules can import them with a single clean line:
-#
-#   from agents import PlannerAgent, BackendAgent, FrontendAgent, QAAgent
-#
-# Each agent inherits from BaseAgent (agents/base_agent.py) and implements:
-#   - name   : str     — agent identifier
-#   - system : str     — LLM system prompt
-#   - run()  : method  — receives AgentMessage, returns AgentMessage
-# =============================================================================
+from agents.planner_agent        import PlannerAgent
+from agents.backend_agent        import BackendAgent
+from agents.frontend_agent       import FrontendAgent
+from agents.qa_agent             import QAAgent
+from agents.fixer_agent          import FixerAgent
+from agents.module_builder_agent import ModuleBuilderAgent
+from agents.dod_checker          import DodCheckerAgent
 
-from agents.planner_agent  import PlannerAgent   # requirement → ProjectPlan JSON
-from agents.backend_agent  import BackendAgent   # ProjectPlan → FastAPI code
-from agents.frontend_agent import FrontendAgent  # ProjectPlan → Next.js code
-from agents.qa_agent       import QAAgent        # syntax check + tsc + LLM review
-from agents.fixer_agent    import FixerAgent     # interactive runtime bug fixer (fix.py)
-
-__all__ = ["PlannerAgent", "BackendAgent", "FrontendAgent", "QAAgent", "FixerAgent"]
+__all__ = [
+    "PlannerAgent", "BackendAgent", "FrontendAgent",
+    "QAAgent", "FixerAgent", "ModuleBuilderAgent", "DodCheckerAgent",
+]
