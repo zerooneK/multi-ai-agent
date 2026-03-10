@@ -102,6 +102,43 @@ def file_exists(path: str) -> bool:
     return Path(os.path.normpath(path)).exists()
 
 
+def patch_file(path: str, old_code: str, new_code: str) -> dict:
+    """
+    Apply a targeted patch to an existing file by replacing old_code with new_code.
+
+    Returns a dict:
+      {"success": True,  "method": "patch",   "path": path}
+      {"success": False, "method": "patch",   "path": path, "error": reason}
+
+    Does NOT fallback to full rewrite — caller decides what to do on failure.
+    """
+    normalised = os.path.normpath(path)
+    target     = Path(normalised)
+
+    if not target.exists():
+        return {"success": False, "method": "patch", "path": path,
+                "error": f"File not found: {path}"}
+
+    try:
+        current = target.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, PermissionError) as exc:
+        return {"success": False, "method": "patch", "path": path,
+                "error": str(exc)}
+
+    if old_code not in current:
+        return {"success": False, "method": "patch", "path": path,
+                "error": "old_code not found in file"}
+
+    occurrences = current.count(old_code)
+    if occurrences > 1:
+        return {"success": False, "method": "patch", "path": path,
+                "error": f"old_code found {occurrences} times — ambiguous patch"}
+
+    patched = current.replace(old_code, new_code, 1)
+    target.write_text(patched, encoding="utf-8")
+    return {"success": True, "method": "patch", "path": path}
+
+
 def actual_files_set(directory: str) -> set[str]:
     """
     Return a set of all existing file paths (relative, forward-slash normalised)
