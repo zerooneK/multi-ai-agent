@@ -77,24 +77,9 @@ Output format — JSON only, no prose, no markdown:
       "suggestion": "how to fix it"
     }
   ],
-  "patches": [
-    {
-      "file": "backend/routers/auth.py",
-      "old_code": "exact lines to replace (must match file exactly)",
-      "new_code": "replacement lines"
-    }
-  ],
-  "backend_fix_instructions":  "fallback: full rewrite instructions if patches insufficient ('' if none)",
-  "frontend_fix_instructions": "fallback: full rewrite instructions if patches insufficient ('' if none)"
+  "backend_fix_instructions":  "detailed step-by-step for backend agent ('' if none)",
+  "frontend_fix_instructions": "detailed step-by-step for frontend agent ('' if none)"
 }
-
-PATCH RULES:
-- Always prefer patches over full rewrite instructions
-- old_code MUST be an exact copy of lines from the file (including indentation)
-- old_code must be unique in the file — do not use code that appears more than once
-- Keep patches small — 3-15 lines max per patch
-- If a fix requires adding a new file entirely, use fix_instructions instead of patches
-- patches array can be empty [] if no targeted fixes are needed
 
 BACKEND CHECKLIST — flag errors for any of these:
 - Python syntax errors (from automated check)

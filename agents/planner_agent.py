@@ -98,7 +98,7 @@ The JSON must follow this exact schema:
       "frontend/types/index.ts",
       "frontend/package.json",
       "frontend/tsconfig.json",
-      "frontend/next.config.ts",
+      "frontend/next.config.js",
       "frontend/tailwind.config.ts",
       "frontend/.env.local"
     ]
@@ -132,29 +132,13 @@ The JSON must follow this exact schema:
       "response":      {"type": "array", "items": {"$ref": "Book"}}
     }
   ],
-  "tasks": [
-    {
-      "id":          "backend_1",
-      "agent":       "backend",
-      "title":       "Create database models and API",
-      "description": "Implement SQLAlchemy ORM models, FastAPI routers, JWT auth",
-      "depends_on":  []
-    },
-    {
-      "id":          "frontend_1",
-      "agent":       "frontend",
-      "title":       "Create Next.js app",
-      "description": "Implement App Router pages, TypeScript types, API client",
-      "depends_on":  ["backend_1"]
-    }
-  ],
   "extra_notes": "Backend pip packages needed. CORS must allow http://localhost:3000. Cookie name: access_token."
 }
 
 CRITICAL RULES:
 - Output ONLY the JSON object. No prose, no markdown fences, no <think> tags, no explanation.
 - Start your response with { and end with }
-- Be thorough: include ALL models, ALL endpoints, ALL tasks needed.
+- Be thorough: include ALL models and ALL endpoints needed.
 - Always include auth endpoints (register, login, logout, /me).
 - Add a dynamic route per database model in folder_structure.files.
 - frontend_framework must always be "Next.js 14 + TypeScript + Tailwind CSS + shadcn/ui".
@@ -194,7 +178,7 @@ Schema:
   "folder_structure": {
     "root": "project_name",
     "dirs": ["backend","backend/models","backend/routers","backend/schemas","frontend","frontend/app","frontend/components","frontend/lib","frontend/types"],
-    "files": ["backend/main.py","backend/models/models.py","backend/routers/items.py","backend/schemas/schemas.py","backend/auth.py","backend/database.py","backend/requirements.txt","frontend/package.json","frontend/tsconfig.json","frontend/next.config.ts","frontend/app/layout.tsx","frontend/app/page.tsx","frontend/app/(auth)/login/page.tsx","frontend/lib/api.ts","frontend/types/index.ts"]
+    "files": ["backend/main.py","backend/models/models.py","backend/routers/items.py","backend/schemas/schemas.py","backend/auth.py","backend/database.py","backend/requirements.txt","frontend/package.json","frontend/tsconfig.json","frontend/next.config.js","frontend/app/layout.tsx","frontend/app/page.tsx","frontend/app/(auth)/login/page.tsx","frontend/lib/api.ts","frontend/types/index.ts"]
   },
   "database_models": [
     {"name": "User", "description": "App user", "fields": [{"name":"id","type":"Integer","primary_key":true},{"name":"email","type":"String","nullable":false},{"name":"password_hash","type":"String","nullable":false}]},
@@ -207,11 +191,6 @@ Schema:
     {"method":"POST","path":"/api/items","description":"Create item","auth_required":true,"request_body":null,"response":null},
     {"method":"PUT","path":"/api/items/{id}","description":"Update item","auth_required":true,"request_body":null,"response":null},
     {"method":"DELETE","path":"/api/items/{id}","description":"Delete item","auth_required":true,"request_body":null,"response":null}
-  ],
-  "tasks": [
-    {"id":"backend_1","agent":"backend","title":"Create backend","description":"FastAPI + SQLAlchemy + JWT","depends_on":[]},
-    {"id":"frontend_1","agent":"frontend","title":"Create frontend","description":"Next.js 14 App Router","depends_on":["backend_1"]},
-    {"id":"qa_1","agent":"qa","title":"QA review","description":"Check all files","depends_on":["frontend_1"]}
   ],
   "extra_notes": "pip install fastapi uvicorn sqlalchemy python-jose passlib python-multipart pydantic-settings. CORS allow http://localhost:3000."
 }"""
@@ -234,9 +213,9 @@ Schema:
             plan     = self._parse_plan(raw)
             message.mark_done(plan.to_json())
             logger.info(
-                "Plan created: %s | %d models | %d endpoints | %d tasks",
+                "Plan created: %s | %d models | %d endpoints",
                 plan.project_name, len(plan.database_models),
-                len(plan.api_endpoints), len(plan.tasks),
+                len(plan.api_endpoints),
             )
             return message
 
@@ -304,7 +283,6 @@ Schema:
                 folder_structure = plan.folder_structure,
                 database_models  = plan.database_models[:max_models],
                 api_endpoints    = plan.api_endpoints,
-                tasks            = plan.tasks,
                 extra_notes      = plan.extra_notes,
             )
 

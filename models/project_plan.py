@@ -34,17 +34,6 @@ class DatabaseModel:
 
 
 @dataclass
-class ProjectTask:
-    """One unit of work assigned to a specific agent."""
-    id:          str
-    agent:       str           # "backend" | "frontend" | "qa"
-    title:       str
-    description: str
-    depends_on:  list[str] = field(default_factory=list)   # task IDs
-    done:        bool = False
-
-
-@dataclass
 class TechStack:
     backend_framework:  str = "FastAPI"
     backend_language:   str = "Python"
@@ -78,7 +67,6 @@ class ProjectPlan:
     folder_structure : Directories and files to create.
     database_models  : ORM models the backend must implement.
     api_endpoints    : REST API contract.
-    tasks            : Ordered list of agent tasks.
     extra_notes      : Any additional context for agents.
     """
     project_name:     str
@@ -87,7 +75,6 @@ class ProjectPlan:
     folder_structure: FolderStructure | None = None
     database_models:  list[DatabaseModel]  = field(default_factory=list)
     api_endpoints:    list[ApiEndpoint]    = field(default_factory=list)
-    tasks:            list[ProjectTask]    = field(default_factory=list)
     extra_notes:      str                  = ""
 
     # ------------------------------------------------------------------
@@ -130,16 +117,6 @@ class ProjectPlan:
                     "auth_required": e.auth_required,
                 }
                 for e in self.api_endpoints
-            ],
-            "tasks": [
-                {
-                    "id":          t.id,
-                    "agent":       t.agent,
-                    "title":       t.title,
-                    "description": t.description,
-                    "depends_on":  t.depends_on,
-                }
-                for t in self.tasks
             ],
             "extra_notes": self.extra_notes,
         }
@@ -188,17 +165,6 @@ class ProjectPlan:
             for e in data.get("api_endpoints", [])
         ]
 
-        tasks = [
-            ProjectTask(
-                id          = t["id"],
-                agent       = t["agent"],
-                title       = t["title"],
-                description = t.get("description", ""),
-                depends_on  = t.get("depends_on", []),
-            )
-            for t in data.get("tasks", [])
-        ]
-
         return cls(
             project_name     = data.get("project_name", "project"),
             description      = data.get("description",  ""),
@@ -206,7 +172,6 @@ class ProjectPlan:
             folder_structure = folder_structure,
             database_models  = database_models,
             api_endpoints    = api_endpoints,
-            tasks            = tasks,
             extra_notes      = data.get("extra_notes", ""),
         )
 

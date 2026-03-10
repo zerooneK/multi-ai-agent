@@ -35,7 +35,7 @@ from agents import BackendAgent, FrontendAgent, PlannerAgent, QAAgent
 from config import cfg
 from models.messages import AgentMessage, TaskStatus, TaskType
 from models.project_plan import ProjectPlan
-from tools.file_tools import create_directory, list_files, patch_file, create_file, read_file
+from tools.file_tools import create_directory, list_files, read_file
 
 logger = logging.getLogger("orchestrator")
 
@@ -264,38 +264,9 @@ class Orchestrator:
 
             # ── Fix cycle ─────────────────────────────────────────────
             if attempt < MAX_FIX_ATTEMPTS:
-                patches      = qa_report.get("patches", [])
                 backend_fix  = qa_report.get("backend_fix_instructions", "")
                 frontend_fix = qa_report.get("frontend_fix_instructions", "")
 
-                # Strategy 1: apply patches (targeted, fast)
-                if patches:
-                    patch_results = self._apply_patches(patches, output_dir)
-                    failed_patches = [r for r in patch_results if not r["success"]]
-                    if failed_patches:
-                        self._emit(
-                            f"⚠️  {len(failed_patches)}/{len(patches)} patches failed",
-                            "falling back to full rewrite for affected files",
-                        )
-                        # Collect files that need full rewrite
-                        failed_files = {r["path"] for r in failed_patches}
-                        backend_fix  = backend_fix or (
-                            f"Rewrite these files (patch failed): {', '.join(failed_files)}"
-                            if any("backend" in p for p in failed_files) else ""
-                        )
-                        frontend_fix = frontend_fix or (
-                            f"Rewrite these files (patch failed): {', '.join(failed_files)}"
-                            if any("frontend" in p for p in failed_files) else ""
-                        )
-                    else:
-                        self._emit(
-                            f"✅ Applied {len(patches)} patch(es) successfully", ""
-                        )
-                        # Patches applied — skip full rewrite unless fix_instructions also set
-                        backend_fix  = "" if not backend_fix else backend_fix
-                        frontend_fix = "" if not frontend_fix else frontend_fix
-
-                # Strategy 2: full rewrite (fallback)
                 if backend_fix:
                     self._emit("🔧 Sending fixes to Backend Agent", "")
                     self._run_agent(
@@ -336,7 +307,7 @@ class Orchestrator:
                         step_label="🔧 Frontend fixing errors",
                     )
 
-                if not patches and not backend_fix and not frontend_fix:
+                if not backend_fix and not frontend_fix:
                     self._emit(
                         "⚠️  QA reported failure but gave no fix instructions",
                         "Stopping fix loop.",
@@ -404,53 +375,6 @@ class Orchestrator:
             logger.info("Agent %s done in %.1fs", receiver, elapsed)
 
         return message
-
-    def _apply_patches(
-        self,
-        patches: list[dict],
-        output_dir: str,
-        max_attempts: int = 3,
-    ) -> list[dict]:
-        """
-        Apply a list of patch objects to files on disk.
-
-        Each patch: {"file": str, "old_code": str, "new_code": str}
-
-        Retries up to max_attempts times per patch.
-        Returns list of results: {"success": bool, "path": str, "error"?: str}
-        """
-        results = []
-        for patch in patches:
-            rel_path = patch.get("file", "")
-            old_code = patch.get("old_code", "")
-            new_code = patch.get("new_code", "")
-
-            if not rel_path or not old_code:
-                results.append({
-                    "success": False, "path": rel_path,
-                    "error": "missing file or old_code in patch",
-                })
-                continue
-
-            full_path = str(Path(output_dir) / rel_path)
-            result    = None
-
-            for attempt in range(1, max_attempts + 1):
-                result = patch_file(full_path, old_code, new_code)
-                if result["success"]:
-                    logger.info("Patch applied (%d/%d): %s", attempt, max_attempts, rel_path)
-                    break
-                logger.warning(
-                    "Patch attempt %d/%d failed for %s: %s",
-                    attempt, max_attempts, rel_path, result.get("error"),
-                )
-
-            results.append(result or {
-                "success": False, "path": full_path,
-                "error": f"patch failed after {max_attempts} attempts",
-            })
-
-        return results
 
     def _build_fix_context(
         self,

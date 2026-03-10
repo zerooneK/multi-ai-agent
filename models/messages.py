@@ -20,7 +20,6 @@ class TaskStatus(str, Enum):
     RUNNING  = "running"
     DONE     = "done"
     FAILED   = "failed"
-    SKIPPED  = "skipped"
 
 
 class TaskType(str, Enum):
@@ -77,7 +76,7 @@ class AgentMessage:
 
     def summary(self) -> str:
         icon = {"pending": "⏳", "running": "🔄", "done": "✅",
-                "failed": "❌", "skipped": "⏭️"}.get(self.status, "•")
+                "failed": "❌"}.get(self.status, "•")
         return (
             f"{icon} [{self.task_type.value.upper()}] "
             f"{self.sender} → {self.receiver} | "

@@ -15,7 +15,6 @@
 # ── tools/file_tools.py ───────────────────────────────────────────────────────
 from tools.file_tools import (
     create_file,       # write content to a file (auto-creates parent dirs)
-    patch_file,        # apply a targeted patch to an existing file
     read_file,         # read and return file content as string
     list_files,        # recursively list all files under a directory
     create_directory,  # create a directory and all missing parents
@@ -51,7 +50,7 @@ from tools.shell_tools import (
 
 __all__ = [
     # file_tools
-    "create_file", "patch_file", "read_file", "list_files", "create_directory", "file_exists",
+    "create_file", "read_file", "list_files", "create_directory", "file_exists",
     # shell — core
     "run_command",
     # shell — Python
