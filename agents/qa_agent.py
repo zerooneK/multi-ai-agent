@@ -128,6 +128,11 @@ RULES:
     # Main entry point
     # ------------------------------------------------------------------
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Track if progressive strategy has ever overflowed — if so, skip it next time
+        self._progressive_always_overflows: bool = False
+
     def run(self, message: AgentMessage) -> AgentMessage:
         message.mark_running()
 
@@ -183,16 +188,21 @@ RULES:
         )
 
         # ── Step 4: LLM deep review ───────────────────────────────────
-        # Strategy 1: progressive prompt reduction
-        # Strategy 2: split backend/frontend (fallback if strategy 1 fails)
+        # Strategy 1: progressive prompt reduction (skipped if known to always overflow)
+        # Strategy 2: split backend/frontend (fallback or primary if overflow known)
         report = None
 
-        report = self._strategy_progressive(
-            plan, py_report, tsc_report, files_on_disk_str, all_files, output_dir,
-        )
+        if self._progressive_always_overflows:
+            logger.info("QA skipping progressive strategy (known context overflow) — using split directly")
+        else:
+            report = self._strategy_progressive(
+                plan, py_report, tsc_report, files_on_disk_str, all_files, output_dir,
+            )
+            if report is None:
+                logger.info("QA progressive strategy failed — trying split review")
+                self._progressive_always_overflows = True  # remember for next QA round
 
         if report is None:
-            logger.info("QA progressive strategy failed — trying split review")
             report = self._strategy_split(
                 plan, py_report, tsc_report, files_on_disk_str, all_files, output_dir,
             )

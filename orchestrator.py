@@ -35,7 +35,7 @@ from agents import BackendAgent, FrontendAgent, PlannerAgent, QAAgent
 from config import cfg
 from models.messages import AgentMessage, TaskStatus, TaskType
 from models.project_plan import ProjectPlan
-from tools.file_tools import create_directory, list_files, patch_file, create_file
+from tools.file_tools import create_directory, list_files, patch_file, create_file, read_file
 
 logger = logging.getLogger("orchestrator")
 
@@ -177,8 +177,11 @@ class Orchestrator:
         # ── Step 4: QA + fix loop ─────────────────────────────────────
         qa_report:    dict       = {}
         prev_issues:  frozenset  = frozenset()  # track stale/looping issues
+        prev_tsc_errors: frozenset = frozenset() # track stale tsc errors separately
         stale_rounds: int        = 0
+        tsc_stale_rounds: int    = 0
         MAX_STALE                = 2            # stop if same issues repeat N times
+        MAX_TSC_STALE            = 2            # stop if same tsc errors repeat N times
 
         for attempt in range(1, MAX_FIX_ATTEMPTS + 1):
             label = f"🔍 QA check (attempt {attempt}/{MAX_FIX_ATTEMPTS})"
@@ -227,6 +230,38 @@ class Orchestrator:
                 stale_rounds = 0
             prev_issues = current_issues
 
+            # ── Stale tsc error detection ──────────────────────────────
+            # tsc errors are deterministic — if the same error persists after
+            # 2 fix attempts, the frontend agent is failing to fix it.
+            # Force a full frontend rewrite of the affected file instead.
+            tsc_errors_in_report = frozenset(
+                i.get("description", "") for i in qa_report.get("issues", [])
+                if "typescript" in i.get("description", "").lower()
+                or i.get("file", "").endswith(".tsx")
+                or i.get("file", "").endswith(".ts")
+            )
+            if tsc_errors_in_report and tsc_errors_in_report == prev_tsc_errors:
+                tsc_stale_rounds += 1
+                if tsc_stale_rounds >= MAX_TSC_STALE:
+                    self._emit(
+                        "⚠️  TypeScript stale loop detected",
+                        f"Same TS errors after {tsc_stale_rounds} fixes — forcing full frontend rewrite",
+                    )
+                    # Override frontend_fix to force full rewrite
+                    affected = [
+                        i.get("file", "") for i in qa_report.get("issues", [])
+                        if i.get("file", "").endswith((".tsx", ".ts"))
+                    ]
+                    qa_report["frontend_fix_instructions"] = (
+                        f"FORCE FULL REWRITE of these files (patch loop failed): "
+                        f"{', '.join(set(affected))}. "
+                        f"Rewrite them completely from scratch ensuring correct TypeScript types."
+                    )
+                    tsc_stale_rounds = 0  # reset after forcing rewrite
+            else:
+                tsc_stale_rounds = 0
+            prev_tsc_errors = tsc_errors_in_report
+
             # ── Fix cycle ─────────────────────────────────────────────
             if attempt < MAX_FIX_ATTEMPTS:
                 patches      = qa_report.get("patches", [])
@@ -271,7 +306,12 @@ class Orchestrator:
                         payload={
                             "plan_json":   plan_json,
                             "output_dir":  output_dir,
-                            "fix_context": backend_fix,
+                            "fix_context": self._build_fix_context(
+                                instructions = backend_fix,
+                                output_dir   = output_dir,
+                                prefix       = "backend",
+                                issues       = qa_report.get("issues", []),
+                            ),
                         },
                         step_label="🔧 Backend fixing errors",
                     )
@@ -286,7 +326,12 @@ class Orchestrator:
                         payload={
                             "plan_json":   plan_json,
                             "output_dir":  output_dir,
-                            "fix_context": frontend_fix,
+                            "fix_context": self._build_fix_context(
+                                instructions = frontend_fix,
+                                output_dir   = output_dir,
+                                prefix       = "frontend",
+                                issues       = qa_report.get("issues", []),
+                            ),
                         },
                         step_label="🔧 Frontend fixing errors",
                     )
@@ -406,6 +451,83 @@ class Orchestrator:
             })
 
         return results
+
+    def _build_fix_context(
+        self,
+        instructions: str,
+        output_dir: str,
+        prefix: str,
+        issues: list[dict],
+        max_file_chars: int = 3000,
+        max_files: int = 8,
+    ) -> str:
+        """
+        Build an enriched fix_context string that includes:
+        1. The QA fix instructions
+        2. Current content of relevant files (so LLM can see what it wrote)
+        3. Related files mentioned in issues (caller files, imported files)
+
+        This prevents the loop where backend rewrites main.py from scratch
+        and forgets to include auth router again.
+        """
+        # Collect files relevant to this agent
+        all_project_files = list_files(output_dir)
+        agent_files = [
+            f for f in all_project_files
+            if f.replace("\\", "/").startswith(f"{prefix}/")
+        ]
+
+        # Prioritise files mentioned in issues
+        issue_files: list[str] = []
+        for issue in issues:
+            f = issue.get("file", "").replace("\\", "/")
+            if f.startswith(f"{prefix}/") and f not in issue_files:
+                issue_files.append(f)
+
+        # Always include key files for the agent
+        if prefix == "backend":
+            priority = ["backend/main.py", "backend/auth.py", "backend/routers/auth.py"]
+        else:
+            priority = ["frontend/app/layout.tsx", "frontend/lib/api.ts", "frontend/types/index.ts"]
+            # For frontend: also find caller files that import broken components
+            for issue_file in issue_files:
+                component_name = Path(issue_file).stem  # e.g. CommentList
+                for candidate in all_project_files:
+                    if not candidate.replace("\\", "/").startswith("frontend/"):
+                        continue
+                    if candidate in priority or candidate in issue_files:
+                        continue
+                    try:
+                        src = read_file(str(Path(output_dir) / candidate))
+                        if component_name in src and candidate not in priority:
+                            priority.append(candidate)  # caller file
+                    except Exception:
+                        pass
+
+        ordered: list[str] = []
+        for f in priority + issue_files + agent_files:
+            if f not in ordered:
+                ordered.append(f)
+
+        # Read file contents (truncated)
+        file_sections: list[str] = []
+        for rel_path in ordered[:max_files]:
+            full_path = str(Path(output_dir) / rel_path)
+            raw = read_file(full_path)
+            if raw.startswith("[Error]") or raw.startswith("[Skipped]"):
+                continue
+            truncated = raw[:max_file_chars]
+            if len(raw) > max_file_chars:
+                truncated += f"\n... [truncated — {len(raw) - max_file_chars} more chars]"
+            file_sections.append(f"=== {rel_path} ===\n{truncated}")
+
+        files_block = "\n\n".join(file_sections)
+
+        return (
+            f"INSTRUCTIONS:\n{instructions}\n\n"
+            f"CURRENT FILE CONTENTS (read carefully before rewriting):\n"
+            f"{files_block}"
+        )
 
     def _run_parallel(
         self,
