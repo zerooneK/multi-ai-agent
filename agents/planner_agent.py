@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 
 from agents.base_agent import BaseAgent
+from config import cfg
 from models.messages import AgentMessage, TaskStatus
 from models.project_plan import ProjectPlan
 
@@ -158,7 +159,14 @@ CRITICAL RULES:
 - Add a dynamic route per database model in folder_structure.files.
 - frontend_framework must always be "Next.js 14 + TypeScript + Tailwind CSS + shadcn/ui".
 - Include pip requirements in extra_notes for the backend.
-"""
+{self._models_limit_rule()}"""
+
+    def _models_limit_rule(self) -> str:
+        """Return a MAX_MODELS rule line if limit is set, else empty string."""
+        limit = cfg.MAX_MODELS
+        if limit > 0:
+            return f"- IMPORTANT: database_models array must contain AT MOST {limit} models (including User). Choose only the most essential ones."
+        return ""
 
     # ------------------------------------------------------------------
     # Compact system prompt — used as fallback for small/local models
@@ -279,6 +287,25 @@ Schema:
     # ------------------------------------------------------------------
 
     def _parse_plan(self, raw: str) -> ProjectPlan:
-        """Extract JSON from raw LLM response and build a ProjectPlan."""
+        """Extract JSON from raw LLM response, enforce MAX_MODELS, build ProjectPlan."""
         plan_dict = self.extract_json(raw)
-        return ProjectPlan.from_dict(plan_dict)
+        plan      = ProjectPlan.from_dict(plan_dict)
+
+        max_models = cfg.MAX_MODELS
+        if max_models > 0 and len(plan.database_models) > max_models:
+            logger.warning(
+                "Plan has %d models — trimming to MAX_MODELS=%d",
+                len(plan.database_models), max_models,
+            )
+            plan = ProjectPlan(
+                project_name   = plan.project_name,
+                description    = plan.description,
+                tech_stack     = plan.tech_stack,
+                folder_structure = plan.folder_structure,
+                database_models  = plan.database_models[:max_models],
+                api_endpoints    = plan.api_endpoints,
+                tasks            = plan.tasks,
+                extra_notes      = plan.extra_notes,
+            )
+
+        return plan

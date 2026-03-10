@@ -20,6 +20,11 @@ Example .env:
   AGENT_PROVIDER=anthropic                          # global fallback
   AGENT_MODEL=claude-haiku-4-5-20251001             # global fallback model
 
+  # Generation limits (tune per model)
+  MAX_MODELS=5              # 0 = unlimited
+  MAX_OUTPUT_TOKENS=16384   # 8192 for 7B, 12288 for 14B, 16384 for cloud
+  MAX_FILES_PER_AGENT=20    # 0 = no limit hint in prompt
+
   PLANNER_PROVIDER=anthropic
   PLANNER_MODEL=claude-sonnet-4-20250514            # best model for planning
 
@@ -111,6 +116,18 @@ class Config:
     # Set PARALLEL_GENERATION=true for cloud APIs (Gemini, OpenRouter, Anthropic)
     PARALLEL_GENERATION: bool = True
 
+    # ── Generation limits ────────────────────────────────────────────────
+    # MAX_MODELS           : max database models planner is allowed to design
+    #                        0 = unlimited (planner decides freely)
+    #                        recommended: 3 for 7B, 5 for 14B, 0 for cloud
+    # MAX_OUTPUT_TOKENS    : max tokens backend/frontend agents may generate per request
+    #                        tune to model: 8192 for 7B, 12288 for 14B, 16384 for cloud
+    # MAX_FILES_PER_AGENT  : hint to LLM — max files to generate in one request
+    #                        0 = unlimited (no hint injected into prompt)
+    MAX_MODELS:          int = 0
+    MAX_OUTPUT_TOKENS:   int = 16384
+    MAX_FILES_PER_AGENT: int = 0
+
     # ------------------------------------------------------------------
     # Helper: resolve provider+model for a specific agent
     # ------------------------------------------------------------------
@@ -156,6 +173,9 @@ def _build() -> Config:
         LOG_LEVEL            = os.environ.get("AGENT_LOG_LEVEL",     Config.LOG_LEVEL),
         OLLAMA_BASE_URL      = os.environ.get("OLLAMA_BASE_URL",     Config.OLLAMA_BASE_URL),
         PARALLEL_GENERATION  = os.environ.get("PARALLEL_GENERATION", "true").strip().lower() != "false",
+        MAX_MODELS           = int(os.environ.get("MAX_MODELS",         str(Config.MAX_MODELS))),
+        MAX_OUTPUT_TOKENS    = int(os.environ.get("MAX_OUTPUT_TOKENS",  str(Config.MAX_OUTPUT_TOKENS))),
+        MAX_FILES_PER_AGENT  = int(os.environ.get("MAX_FILES_PER_AGENT",str(Config.MAX_FILES_PER_AGENT))),
     )
 
     # Apply global model override to the active provider's default

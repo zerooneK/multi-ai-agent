@@ -16,6 +16,8 @@ Key rules enforced in prompts:
 from __future__ import annotations
 
 import logging
+
+from config import cfg
 from pathlib import Path
 
 from agents.base_agent import BaseAgent
@@ -214,7 +216,7 @@ CODE PATTERNS TO FOLLOW EXACTLY:
         # ── Attempt 1: normal ────────────────────────────────────────
         written: list[str] = []
         try:
-            raw   = self.chat(prompt, max_tokens=16384)
+            raw   = self.chat(prompt, max_tokens=cfg.MAX_OUTPUT_TOKENS)
             files = self.extract_json(raw)
             written = self._write_files(files, output_dir)
             message.mark_done(self._summary(written))
@@ -225,7 +227,7 @@ CODE PATTERNS TO FOLLOW EXACTLY:
         # ── Attempt 2: force JSON-only prompt ────────────────────────
         try:
             retry_prompt = self._json_only_prompt(plan, fix_context)
-            raw   = self.chat(retry_prompt, max_tokens=16384)
+            raw   = self.chat(retry_prompt, max_tokens=cfg.MAX_OUTPUT_TOKENS)
             files = self.extract_json(raw)
             written = self._write_files(files, output_dir)
             message.mark_done(self._summary(written))
@@ -284,7 +286,15 @@ Generate ALL of these files:
   frontend/components/NavBar.tsx     (nav links — use client for mobile menu toggle)
 {self._model_components(plan)}
 
+{self._files_limit_hint()}
 Output the JSON array of file objects now:"""
+
+    def _files_limit_hint(self) -> str:
+        """Return a files-limit instruction line for the prompt if MAX_FILES_PER_AGENT is set."""
+        limit = cfg.MAX_FILES_PER_AGENT
+        if limit > 0:
+            return f"\nIMPORTANT: Generate AT MOST {limit} files total. Combine utilities if needed."
+        return ""
 
     def _fix_prompt(self, plan: ProjectPlan, fix_context: str) -> str:
         return f"""The QA agent found issues in the Next.js frontend. Fix them.
