@@ -177,7 +177,10 @@ RULES:
         # ── Step 3: Build file inventory ─────────────────────────────
         all_files     = list_files(output_dir)
         files_on_disk = actual_files_set(output_dir)
-        files_on_disk_str = "\n".join(sorted(files_on_disk))
+        files_on_disk_str = "\n".join(
+            f for f in sorted(files_on_disk)
+            if "node_modules" not in f and ".next" not in f and ".git" not in f
+        )
 
         # ── Step 4: LLM deep review ───────────────────────────────────
         # Strategy 1: progressive prompt reduction
@@ -239,10 +242,10 @@ RULES:
 
         attempts = [
             # (max_chars, max_files, include_plan_full, include_files)
-            (2000, 20, True,  True),
-            (500,   5, True,  True),
-            (0,     0, True,  False),
-            (0,     0, False, False),
+            (2000, 20, True,  True),   # attempt 1: files + full plan
+            (500,   5, True,  True),   # attempt 2: fewer files + full plan
+            (0,     0, False, False),  # attempt 3: summary only (skip full plan)
+            (0,     0, False, False),  # attempt 4: same — last resort
         ]
 
         for attempt_num, (chars, files, include_plan, include_files) in enumerate(attempts, start=1):
@@ -330,10 +333,15 @@ RULES:
                                       max_chars=2000, max_files=15,
                                       priority=BACKEND_PRIORITY)
 
+        plan_summary = (
+            f"Project: {plan.project_name} | "
+            f"Models: {', '.join(m.name for m in plan.database_models)} | "
+            f"Endpoints: {len(plan.api_endpoints)}"
+        )
         prompt = (
             f"Review ONLY the FastAPI backend for: {plan.project_name}\n\n"
             f"=== PYTHON SYNTAX CHECK ===\n{py_report}\n\n"
-            f"=== PROJECT PLAN ===\n{plan.to_json(indent=1)}\n\n"
+            f"=== PROJECT SUMMARY ===\n{plan_summary}\n\n"
             f"=== BACKEND FILE CONTENTS ===\n{content}\n\n"
             "Output a JSON report covering ONLY backend issues.\n"
             "Use the same JSON format: {passed, summary, issues[], "
@@ -387,10 +395,15 @@ RULES:
                                       max_chars=2000, max_files=15,
                                       priority=FRONTEND_PRIORITY)
 
+        plan_summary = (
+            f"Project: {plan.project_name} | "
+            f"Models: {', '.join(m.name for m in plan.database_models)} | "
+            f"Endpoints: {len(plan.api_endpoints)}"
+        )
         prompt = (
             f"Review ONLY the Next.js 14 frontend for: {plan.project_name}\n\n"
             f"=== TYPESCRIPT CHECK ===\n{tsc_report}\n\n"
-            f"=== PROJECT PLAN ===\n{plan.to_json(indent=1)}\n\n"
+            f"=== PROJECT SUMMARY ===\n{plan_summary}\n\n"
             f"=== FRONTEND FILE CONTENTS ===\n{content}\n\n"
             "Output a JSON report covering ONLY frontend issues.\n"
             "Use the same JSON format: {passed, summary, issues[], "

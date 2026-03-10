@@ -6,3 +6,4 @@ output/
 *.pyo
 *.pyd
 *.zip
+logs/
