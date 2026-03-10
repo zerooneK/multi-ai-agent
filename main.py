@@ -240,11 +240,28 @@ def main() -> None:
 
     # Next steps hint
     if result.success and result.output_dir:
-        _print("\n[bold]Next steps:[/bold]" if _RICH else "\nNext steps:")
-        _print(f"  cd {result.output_dir}/backend")
-        _print("  pip install -r requirements.txt")
-        _print("  uvicorn main:app --reload")
-        _print("  cd ../frontend && npm install && npm run dev")
+        proj = result.output_dir
+        if _RICH:
+            from rich.panel import Panel
+            from rich import box
+            _console.print(Panel(
+                "[bold]Run your project:[/bold]\n"
+                f"  [dim]Backend :[/dim]  cd {proj}/backend && pip install -r requirements.txt\n"
+                f"  [dim]         [/dim]  uvicorn backend.main:app --reload\n"
+                f"  [dim]Frontend:[/dim]  cd {proj}/frontend && npm install && npm run dev\n\n"
+                "[bold]Hit a runtime error?[/bold]\n"
+                f"  [dim]Run    :[/dim]  python fix.py {proj}\n"
+                f"  [dim]Then   :[/dim]  paste the error → AI fixes the files",
+                title="Next Steps", border_style="green", padding=(0, 2),
+            ))
+        else:
+            print("\nNext steps:")
+            print(f"  cd {proj}/backend && pip install -r requirements.txt")
+            print("  uvicorn backend.main:app --reload")
+            print(f"  cd {proj}/frontend && npm install && npm run dev")
+            print("\nHit a runtime error?")
+            print(f"  python fix.py {proj}")
+            print("  (paste the error → AI fixes the files)")
     print()
 
 

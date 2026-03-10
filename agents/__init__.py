@@ -16,5 +16,6 @@ from agents.planner_agent  import PlannerAgent   # requirement → ProjectPlan J
 from agents.backend_agent  import BackendAgent   # ProjectPlan → FastAPI code
 from agents.frontend_agent import FrontendAgent  # ProjectPlan → Next.js code
 from agents.qa_agent       import QAAgent        # syntax check + tsc + LLM review
+from agents.fixer_agent    import FixerAgent     # interactive runtime bug fixer (fix.py)
 
-__all__ = ["PlannerAgent", "BackendAgent", "FrontendAgent", "QAAgent"]
+__all__ = ["PlannerAgent", "BackendAgent", "FrontendAgent", "QAAgent", "FixerAgent"]
