@@ -23,19 +23,20 @@ import sys
 import time
 from pathlib import Path
 
-# ── Configure logging before any local imports ────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
-# Silence noisy HTTP libraries
-for lib in ("httpx", "httpcore", "openai", "anthropic"):
-    logging.getLogger(lib).setLevel(logging.WARNING)
+# ── Bootstrap: load config, then configure logging ───────────────────────
+# logger_setup must be called before any agent imports so all loggers
+# are captured from the start of the run.
+from config import cfg
+from logger_setup import setup_logging
 
+# Temporary basic config so startup messages aren't lost before run_log_dir
+logging.basicConfig(level=logging.INFO, stream=sys.stdout,
+                    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s")
 logger = logging.getLogger("main")
 
-from config import cfg
+# Will be replaced per-run once we know the project name (see main())
+_run_log_dir: "Path | None" = None
+
 from orchestrator import Orchestrator, PipelineResult
 
 
@@ -188,6 +189,19 @@ def main() -> None:
     _print(f"\n[bold]Requirement:[/bold] {requirement}\n" if _RICH
            else f"\nRequirement: {requirement}\n")
 
+    # ── Setup file logging now that we have a requirement ───────────────
+    global _run_log_dir
+    # Use first 5 words of requirement as a readable log folder suffix
+    short_name = "_".join(requirement.split()[:5])
+    _run_log_dir = setup_logging(
+        project_name = short_name,
+        log_base_dir = cfg.LOG_DIR,
+        log_level    = cfg.LOG_LEVEL,
+    )
+    if _run_log_dir:
+        _print(f"[dim]Logs → {_run_log_dir}[/dim]" if _RICH
+               else f"Logs → {_run_log_dir}")
+
     # Run the pipeline
     orchestrator = Orchestrator(
         output_base_dir = cfg.OUTPUT_DIR,
@@ -214,6 +228,7 @@ def main() -> None:
                 "success":       result.success,
                 "project_name":  result.project_name,
                 "output_dir":    result.output_dir,
+                "log_dir":       str(_run_log_dir) if _run_log_dir else None,
                 "files_created": result.files_created,
                 "duration_s":    result.duration_s,
                 "qa_report":     result.qa_report,
@@ -229,7 +244,7 @@ def main() -> None:
         _print(f"  cd {result.output_dir}/backend")
         _print("  pip install -r requirements.txt")
         _print("  uvicorn main:app --reload")
-        _print("  # Then open frontend/index.html in your browser")
+        _print("  cd ../frontend && npm install && npm run dev")
     print()
 
 

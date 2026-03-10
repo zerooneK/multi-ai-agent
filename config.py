@@ -111,6 +111,12 @@ class Config:
     # ── Logging ──────────────────────────────────────────────────────────
     LOG_LEVEL: str = "INFO"
 
+    # ── Logging to file ─────────────────────────────────────────────────
+    # LOG_DIR: directory to store run logs (relative to project root or absolute)
+    #           set to "" to disable file logging
+    # LOG_LEVEL: DEBUG | INFO | WARNING | ERROR
+    LOG_DIR: str = "logs"
+
     # ── Parallel generation ──────────────────────────────────────────────
     # Set PARALLEL_GENERATION=false in .env to disable (e.g. when using Ollama)
     # Set PARALLEL_GENERATION=true for cloud APIs (Gemini, OpenRouter, Anthropic)
@@ -170,6 +176,7 @@ def _build() -> Config:
     kwargs: dict = dict(
         PROVIDER        = global_provider,
         OUTPUT_DIR           = os.environ.get("OUTPUT_DIR",           Config.OUTPUT_DIR),
+        LOG_DIR              = os.environ.get("LOG_DIR",              Config.LOG_DIR),
         LOG_LEVEL            = os.environ.get("AGENT_LOG_LEVEL",     Config.LOG_LEVEL),
         OLLAMA_BASE_URL      = os.environ.get("OLLAMA_BASE_URL",     Config.OLLAMA_BASE_URL),
         PARALLEL_GENERATION  = os.environ.get("PARALLEL_GENERATION", "true").strip().lower() != "false",
