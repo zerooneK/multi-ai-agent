@@ -14,14 +14,13 @@
 # ── Inter-agent communication ─────────────────────────────────────────────────
 from models.messages import (
     AgentMessage,   # envelope passed between agents (sender, receiver, payload, status)
-    TaskStatus,     # enum: pending | running | done | failed | skipped
+    TaskStatus,     # enum: pending | running | done | failed
     TaskType,       # enum: plan | backend | frontend | qa | fix
 )
 
 # ── Project blueprint ─────────────────────────────────────────────────────────
 from models.project_plan import (
     ProjectPlan,      # top-level plan produced by PlannerAgent
-    ProjectTask,      # one unit of work assigned to an agent
     ApiEndpoint,      # describes one REST endpoint (method, path, auth, schema)
     DatabaseModel,    # describes one ORM model (name, fields)
     TechStack,        # technology choices (framework, db, orm, auth, ...)
@@ -32,6 +31,6 @@ __all__ = [
     # messages.py
     "AgentMessage", "TaskStatus", "TaskType",
     # project_plan.py
-    "ProjectPlan", "ProjectTask", "ApiEndpoint",
+    "ProjectPlan", "ApiEndpoint",
     "DatabaseModel", "TechStack", "FolderStructure",
 ]
